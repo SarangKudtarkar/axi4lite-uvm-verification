@@ -1,0 +1,29 @@
+name: DUT bounded formal
+on:
+  push:
+    paths: ['rtl/**', 'tb/**', 'scripts/**', '.github/workflows/**', 'formal/**']
+  pull_request:
+    paths: ['rtl/**', 'tb/**', 'scripts/**', '.github/workflows/**', 'formal/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bounded-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y yosys
+      - name: Elaborate real DUT and check 24 steps
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          yosys -Q -T -p 'read_verilog -formal -sv rtl/axi4lite_slave.sv formal/axi4lite_dut_fv.sv; prep -top axi4lite_dut_fv -flatten; async2sync; memory_map; opt; sat -seq 24 -prove-asserts -set-assumes -verify -dump_vcd build/counterexample.vcd' | tee formal-check.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bounded-formal-evidence
+          path: |
+            *.log
+            build/counterexample.vcd

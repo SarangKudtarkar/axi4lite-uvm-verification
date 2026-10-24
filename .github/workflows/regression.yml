@@ -1,0 +1,41 @@
+name: Protocol regression
+on:
+  push:
+    paths: ['rtl/**', 'tb/**', 'scripts/**', '.github/workflows/**', 'formal/**']
+  pull_request:
+    paths: ['rtl/**', 'tb/**', 'scripts/**', '.github/workflows/**', 'formal/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  protocol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y iverilog
+      - name: Oracle and real-DUT simulation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/gen_vectors.py
+          iverilog -g2012 -s tb_protocol -o build/protocol rtl/axi4lite_slave.sv tb/tb_protocol.sv
+          vvp build/protocol | tee protocol.log
+      - name: Prove checker detects data and response mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mutant in INJECT_WSTRB_BUG INJECT_BRESP_ERR; do
+            iverilog -g2012 -D"$mutant" -s tb_protocol -o build/mutant rtl/axi4lite_slave.sv tb/tb_protocol.sv
+            if vvp build/mutant > "$mutant.log" 2>&1; then
+              cat "$mutant.log"
+              echo 'ERROR: mutant escaped checker'
+              exit 1
+            fi
+            grep -E '(R|B) response' "$mutant.log"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: protocol-evidence
+          path: '*.log'
