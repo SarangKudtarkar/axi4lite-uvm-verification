@@ -1,9 +1,5 @@
 # AXI4-Lite verification: UVM, protocol simulation, and bounded formal
 
-![Protocol regression](https://github.com/SandeepGorrepati/axi4lite-uvm-verification/actions/workflows/regression.yml/badge.svg)
-![DUT bounded formal](https://github.com/SandeepGorrepati/axi4lite-uvm-verification/actions/workflows/formal.yml/badge.svg)
-![UVM](https://github.com/SandeepGorrepati/axi4lite-uvm-verification/actions/workflows/uvm.yml/badge.svg)
-
 Verification of a 256x32 AXI4-Lite memory slave with independent AW/W acceptance, byte strobes, and OKAY/DECERR responses. Evidence is separated by execution method: the free protocol test is not presented as a UVM run, and a policy-model proof is not presented as proof of the real RTL.
 
 ## Implemented verification layers
