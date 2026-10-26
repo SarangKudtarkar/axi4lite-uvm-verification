@@ -57,3 +57,127 @@ This is bounded safety through 24 steps, not an unbounded proof, AXI certificati
 - Added real channel skew/backpressure and a checker mutation gate.
 
 Full evidence and limitations are in [regression summary](docs/REGRESSION_SUMMARY.md) and Actions logs. No paid simulator, FPGA board, or subscription is required for the protocol and formal flows.
+
+
+**Enable the bug** by compiling with `+define+INJECT_WSTRB_BUG` (Questa:
+`vlog -sv +define+INJECT_WSTRB_BUG ...`; EDA Playground: add it to the compile args).
+
+**What the bug is:** the write path ignores `WSTRB` and writes the full 32-bit word
+on every write. A partial-strobe write (e.g. `WSTRB=0x1`) should update only byte 0
+and leave the other three bytes intact.
+
+**How the TB catches it:** the directed sequence writes `0xFFFFFFFF` to `0x20`, then
+writes `0x000000AA` with `WSTRB=0x1`. The reference-model scoreboard (which honors
+strobes) predicts `0xFFFFFFAA`. The buggy DUT stores `0x000000AA`, so the read-back
+fails:
+
+```
+UVM_ERROR ... [SCB] READ MISMATCH addr=0x00000020 expected=0xFFFFFFAA got=0x000000AA
+UVM_INFO  ... [SCB] RESULT: FAIL
+```
+
+**Debug walk-through (say this in an interview):** mismatch on a partial-strobe write
+→ compare expected vs actual byte-by-byte → only the strobed byte is correct, the
+others are wrong → points straight at WSTRB handling in the write path → confirmed by
+re-running without the define (PASS). This is the loop: *reproduce → localize from the
+scoreboard diff → form a hypothesis → confirm.*
+
+Run **without** the define = clean PASS. Run **with** it = the scoreboard catches the
+bug on the exact transaction. That contrast is the artifact to screenshot.
+
+**Second injectable bug — protocol error (assertion catch):** compile with
+`+define+INJECT_BRESP_ERR` and the slave returns **SLVERR** on a normal read/write.
+The bound concurrent assertions `A_BRESP_OKAY` / `A_RRESP_OKAY` fire immediately:
+```
+"[SVA] BRESP not OKAY"
+```
+This shows the **assertion layer** (not just the scoreboard) catching an illegal
+protocol response — two independent checking mechanisms, two classes of bug caught.
+
+## Coverage closure
+
+The `axi4lite_regression_test` is built to **close 100% of the defined functional
+coverage**: directed corners + 16 write/read pairs + 40 constrained-random transactions
+hit every bin in `cg_axi` — operation (read/write), address range (low/mid/high),
+byte-strobe (full/single/other), and the operation × address-range cross.
+
+Read the closure number from the report:
+```
+UVM_INFO ... [COV] Functional coverage = 100.00%
+```
+If a bin is unhit, that's the signal to write a targeted directed test for it — the
+core coverage-driven-verification loop. Capture the coverage report (Questa: `coverage
+report -detail`) as proof.
+
+## What this demonstrates (for interviews)
+- Full UVM component hierarchy and phasing.
+- Constrained-random stimulus with `constraint` blocks and `randomize() with`.
+- Reference-model scoreboard (self-checking, not just log-watching).
+- Functional coverage with `covergroup`/`coverpoint`/`cross` and coverage reporting.
+- Assertion-based verification (concurrent SVA) for protocol legality.
+- Reusable agent and a layered sequence library.
+
+## Extensions — status
+
+**Implemented (in this repo):**
+- ✅ **DECERR error-path** — out-of-range → DECERR, `axi4lite_error_seq`,
+  scoreboard response-prediction, resp/oob coverage, legal-response SVA.
+- ✅ **UVM RAL** — `uvm_reg_block` + `uvm_mem` + `uvm_reg_adapter` in
+  `tb/axi4lite_ral.sv` (run `+UVM_TESTNAME=axi4lite_ral_test`).
+- ✅ **11 concurrent SVA assertions** bound to the interface.
+- ✅ **Formal proof** — 5 response/handshake safety properties proven with
+  SymbiYosys + Z3 (k-induction); see `formal/`.
+
+**Planned (not yet implemented):**
+- **Random back-pressure** — wait-states on AWREADY/WREADY/ARREADY + outstanding/
+  interleaved transactions.
+- **Gate-level / FPGA** smoke of the DUT.
+
+## Notes / honesty
+- Tested against UVM 1.2 semantics. First compile on a new tool version may need
+  trivial tweaks (e.g., `+define`s); the methodology and structure are the point.
+- Two injectable bugs are included (`INJECT_WSTRB_BUG` = data, `INJECT_BRESP_ERR` =
+  protocol) to demonstrate the scoreboard and the SVA layer each catching defects.
+```
+## Cadence flow
+
+### Formal (JasperGold) - tested
+
+Run from the repository root:
+
+```
+jg -no_gui formal/axi4lite_dut_fv.tcl     # batch
+jg -gui    formal/axi4lite_dut_fv.tcl     # GUI (Property Table, waveforms, Explain)
+```
+
+`formal/axi4lite_dut_fv.tcl`:
+
+```
+clear -all
+analyze -sv12 rtl/axi4lite_slave.sv formal/axi4lite_dut_fv.sv
+elaborate -top axi4lite_dut_fv
+clock aclk
+reset -expression {!aresetn}
+prove -all
+report -summary
+```
+
+Result on the real-DUT harness `axi4lite_dut_fv` (`MEM_WORDS=4`, JasperGold 2026.06):
+
+| Item | Result |
+|---|---|
+| Assertions | 10 / 10 proven |
+| Counterexamples / undetermined | 0 / 0 |
+| Covers | 17 covered, 1 unreachable |
+| Assumptions | 8 (master VALID/payload persistence + initial reset) |
+
+The unreachable cover is the first-cycle branch `if(!past_valid) assume(!aresetn)`. Jasper's `reset -expression {!aresetn}` already applies reset before analysis, so that branch is never entered and the cover is redundant, not a sign of an over-constrained harness.
+
+Scope: safety properties (legal B/R response codes, response credits, B/R payload persistence under stall) on a four-word memory. This is not a liveness, memory-data-equivalence, or full-size (256-word) proof. The `(* anyseq *)` inputs become free inputs in Jasper, so no changes to the harness were needed.
+
+Not committed: `jgproject/` (Jasper session output, listed in `.gitignore`).
+
+### UVM on Xcelium - not yet run
+
+The UVM environment has been run on Verilator (see above). It has not yet been run on Xcelium, so no Cadence UVM results are claimed here.
+
