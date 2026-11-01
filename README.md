@@ -141,43 +141,55 @@ report -detail`) as proof.
 ```
 ## Cadence flow
 
-### Formal (JasperGold) - tested
+### Formal (JasperGold)
 
-Run from the repository root:
+Two harnesses check the same real-DUT properties on `axi4lite_slave` with `MEM_WORDS=4`. Run all commands from the repository root.
+
+| Harness | Script | Style |
+|---|---|---|
+| `formal/axi4lite_dut_fv.sv` | `formal/axi4lite_dut_fv.tcl` | Immediate assertions and `(* anyseq *)` inputs, shared with the Yosys flow |
+| `formal/axi4lite_dut_fv_sva.sv` | `formal/axi4lite_dut_fv_sva.tcl` | Concurrent SVA (`assert property`, `assume property`, `cover property`), labeled properties, free inputs as ports |
 
 ```
-jg -no_gui formal/axi4lite_dut_fv.tcl     # batch
-jg -gui    formal/axi4lite_dut_fv.tcl     # GUI (Property Table, waveforms, Explain)
+jg -no_gui formal/axi4lite_dut_fv.tcl        # shared harness, batch
+jg -no_gui formal/axi4lite_dut_fv_sva.tcl    # SVA harness, batch
+jg -gui    formal/axi4lite_dut_fv_sva.tcl    # GUI: Property Table, traces, Explain
 ```
 
-`formal/axi4lite_dut_fv.tcl`:
+`formal/axi4lite_dut_fv_sva.tcl`:
 
 ```
 clear -all
-analyze -sv12 rtl/axi4lite_slave.sv formal/axi4lite_dut_fv.sv
-elaborate -top axi4lite_dut_fv
+analyze -sv12 rtl/axi4lite_slave.sv formal/axi4lite_dut_fv_sva.sv
+elaborate -top axi4lite_dut_fv_sva
 clock aclk
 reset -expression {!aresetn}
 prove -all
 report -summary
 ```
 
-Result on the real-DUT harness `axi4lite_dut_fv` (`MEM_WORDS=4`, JasperGold 2026.06):
+Reset is applied by `reset -expression {!aresetn}` in both scripts. The SVA harness has no first-cycle reset assumption and no `past_valid` register.
+
+What is checked, in both harnesses:
+
+- Assumptions: master VALID and payload (address, data, strobe) persist until READY; READY may stall indefinitely.
+- Assertions (10): B and R responses only for accepted requests (AW, W and AR credits), response codes limited to OKAY and DECERR, and B/R VALID and payload stable while the master stalls READY.
+
+Measured result on `formal/axi4lite_dut_fv.sv` (JasperGold 2026.06):
 
 | Item | Result |
 |---|---|
 | Assertions | 10 / 10 proven |
 | Counterexamples / undetermined | 0 / 0 |
 | Covers | 17 covered, 1 unreachable |
-| Assumptions | 8 (master VALID/payload persistence + initial reset) |
+| Assumptions | 8 (7 master persistence + first-cycle reset) |
 
-The unreachable cover is the first-cycle branch `if(!past_valid) assume(!aresetn)`. Jasper's `reset -expression {!aresetn}` already applies reset before analysis, so that branch is never entered and the cover is redundant, not a sign of an over-constrained harness.
+The unreachable cover is the first-cycle branch `if(!past_valid) assume(!aresetn)`. Jasper's `reset -expression {!aresetn}` already applies reset before analysis, so that branch is never entered. It is redundant, not a sign of an over-constrained harness. The SVA harness has no such branch.
 
-Scope: safety properties (legal B/R response codes, response credits, B/R payload persistence under stall) on a four-word memory. This is not a liveness, memory-data-equivalence, or full-size (256-word) proof. The `(* anyseq *)` inputs become free inputs in Jasper, so no changes to the harness were needed.
+Scope: safety properties (legal response codes, response credits, B/R persistence under stall) on a four-word memory. This is not a liveness, memory-data-equivalence, or full-size (256-word) proof. The Yosys flow still uses `formal/axi4lite_dut_fv.sv`.
 
 Not committed: `jgproject/` (Jasper session output, listed in `.gitignore`).
 
 ### UVM on Xcelium - not yet run
 
 The UVM environment has been run on Verilator (see above). It has not yet been run on Xcelium, so no Cadence UVM results are claimed here.
-
